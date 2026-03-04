@@ -1,145 +1,118 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Mic, Loader2, HelpCircle, Globe } from 'lucide-react';
+import { Send, Mic, Loader2, HelpCircle, Settings, Download } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useSearchParams, useRouter, usePathname } from 'next/navigation';
+import { GoogleGenAI } from '@google/genai';
 import scaleData from '@/data/scale.json';
 
-type Language = 'zh' | 'en';
+type Option = { label: string; score: number };
 
 type Message = {
   id: string;
   role: 'assistant' | 'user';
-  content?: string;
-  msgKey?: 'greeting' | 'checking' | 'check-error' | 'finish';
+  content: string;
   isQuestion?: boolean;
   questionId?: string;
+  options?: Option[];
   isLoading?: boolean;
-};
-
-const GREETINGS = {
-  zh: '您好！我是您的发育行为儿科助手。今天我会问您几个关于孩子日常表现的小问题，帮助我们更好地了解他/她。请您根据孩子平时的真实情况回答。我们现在开始吧！',
-  en: 'Hello! I am your developmental-behavioral pediatric assistant. Today I will ask you a few questions about your child\'s daily behavior to help us understand them better. Please answer based on your child\'s actual situation. Let\'s get started!'
-};
-
-const CHECKING_MSG = {
-  zh: '正在为您整理和校验回答，请稍候...',
-  en: 'Organizing and verifying your answers, please wait...'
-};
-
-const CHECK_ERROR_MSG = {
-  zh: '抱歉，校验过程中出现了一些网络问题，但您的回答已记录。感谢您的配合！',
-  en: 'Sorry, there was a network issue during verification, but your answers have been recorded. Thank you for your cooperation!'
-};
-
-const FINISH_MSG = {
-  zh: '感谢您的补充！如果有其他问题，您可以随时告诉我。',
-  en: 'Thank you for the additional information! If you have any other questions, feel free to let me know.'
+  isExport?: boolean;
 };
 
 export default function ChatUI() {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const pathname = usePathname();
-
-  const urlLang = searchParams.get('lang') as Language;
-  const initialLang = urlLang === 'en' ? 'en' : 'zh';
-
-  const [lang, setLang] = useState<Language>(initialLang);
   const [messages, setMessages] = useState<Message[]>([]);
   const [currentQIndex, setCurrentQIndex] = useState(0);
   const [inputValue, setInputValue] = useState('');
   const [isRecording, setIsRecording] = useState(false);
-  const [isChecking, setIsChecking] = useState(false);
-  const [answers, setAnswers] = useState<{question: string, answer: string}[]>([]);
+  const [answers, setAnswers] = useState<{question: string, answer: string, score: number}[]>([]);
+
+  // API Key state
+  const [apiKey, setApiKey] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
+  const [tempKey, setTempKey] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
+  const chatRef = useRef<any>(null);
 
-  const handleLangChange = () => {
-    const newLang = lang === 'zh' ? 'en' : 'zh';
-    setLang(newLang);
-    const params = new URLSearchParams(searchParams.toString());
-    params.set('lang', newLang);
-    router.replace(`${pathname}?${params.toString()}`);
-  };
-
-  const getMessageContent = (msg: Message, currentLang: Language) => {
-    if (msg.content) return msg.content;
-    if (msg.msgKey) {
-      const dict = {
-        'greeting': GREETINGS,
-        'checking': CHECKING_MSG,
-        'check-error': CHECK_ERROR_MSG,
-        'finish': FINISH_MSG
-      };
-      return dict[msg.msgKey][currentLang];
+  const initChat = (key: string) => {
+    try {
+      const ai = new GoogleGenAI({ apiKey: key });
+      chatRef.current = ai.chats.create({
+        model: "gemini-3-flash-preview",
+        config: {
+          systemInstruction: "你现在是一位拥有20年临床经验的发育行为儿科主治医师，并且是一位极具同理心的沟通专家。你的核心任务是辅助患儿家属完成医学量表的填写。当家属对某道题目产生困惑时，请用不超过小学六年级的阅读理解难度进行解释，并提供生活化的场景类比。严禁使用任何专业医学词汇，严禁直接给出任何医疗诊断结论。"
+        }
+      });
+    } catch (err) {
+      console.error("Failed to initialize Gemini:", err);
     }
-    if (msg.isQuestion && msg.questionId) {
-      const q = scaleData.questions.find(q => q.id === msg.questionId);
-      return q ? q.text[currentLang] : '';
-    }
-    return '';
   };
 
   useEffect(() => {
-    // Initial greeting and first question
+    const storedKey = localStorage.getItem('gemini_api_key');
+    const envKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+    const activeKey = storedKey || envKey || '';
+    setApiKey(activeKey);
+    if (activeKey) {
+      initChat(activeKey);
+    }
+
     if (messages.length === 0) {
       const firstQuestion = scaleData.questions[0];
       setMessages([
         {
           id: 'greeting',
           role: 'assistant',
-          msgKey: 'greeting'
+          content: `您好！我是您的发育行为儿科助手。今天我们将完成《${scaleData.metadata.title}》。我会逐一向您提问，请根据孩子的真实情况作答。`
         },
         {
           id: `q-${firstQuestion.id}`,
           role: 'assistant',
+          content: firstQuestion.text,
           isQuestion: true,
-          questionId: firstQuestion.id
+          questionId: firstQuestion.id,
+          options: firstQuestion.options
         }
       ]);
     }
 
-    // Setup Speech Recognition
     if (typeof window !== 'undefined') {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (SpeechRecognition) {
         recognitionRef.current = new SpeechRecognition();
         recognitionRef.current.continuous = true;
         recognitionRef.current.interimResults = true;
-        recognitionRef.current.lang = lang === 'zh' ? 'zh-CN' : 'en-US';
+        recognitionRef.current.lang = 'zh-CN';
 
         recognitionRef.current.onresult = (event: any) => {
           let finalTranscript = '';
-
           for (let i = event.resultIndex; i < event.results.length; ++i) {
             if (event.results[i].isFinal) {
               finalTranscript += event.results[i][0].transcript;
             }
           }
-
           if (finalTranscript) {
             setInputValue(prev => prev + finalTranscript);
           }
         };
 
-        recognitionRef.current.onerror = (event: any) => {
-          console.error("Speech recognition error", event.error);
-          setIsRecording(false);
-        };
-
-        recognitionRef.current.onend = () => {
-          setIsRecording(false);
-        };
+        recognitionRef.current.onerror = () => setIsRecording(false);
+        recognitionRef.current.onend = () => setIsRecording(false);
       }
     }
-  }, [lang, messages.length]);
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  const saveApiKey = () => {
+    localStorage.setItem('gemini_api_key', tempKey);
+    setApiKey(tempKey);
+    initChat(tempKey);
+    setShowSettings(false);
+  };
 
   const startRecording = (e: React.MouseEvent | React.TouchEvent) => {
     e.preventDefault();
@@ -147,11 +120,9 @@ export default function ChatUI() {
       try {
         recognitionRef.current.start();
         setIsRecording(true);
-      } catch(err) {
-        console.error(err);
-      }
+      } catch(err) {}
     } else {
-      alert(lang === 'zh' ? '您的浏览器不支持语音识别功能，请使用文本输入。' : 'Your browser does not support speech recognition. Please type.');
+      alert('您的浏览器不支持语音识别功能，请使用文本输入。');
     }
   };
 
@@ -163,89 +134,99 @@ export default function ChatUI() {
     }
   };
 
-  const handleSend = async () => {
-    if (!inputValue.trim()) return;
+  const handleOptionClick = (opt: Option, qId: string) => {
+    if (currentQIndex >= scaleData.metadata.total || qId !== scaleData.questions[currentQIndex]?.id) return;
 
     const userMsg: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: inputValue.trim()
+      content: opt.label
     };
-
     setMessages(prev => [...prev, userMsg]);
+
+    const currentQ = scaleData.questions[currentQIndex];
+    const newAnswers = [...answers, { question: currentQ.text, answer: opt.label, score: opt.score }];
+    setAnswers(newAnswers);
+
+    advanceToNextQuestion();
+  };
+
+  const handleSend = () => {
+    const text = inputValue.trim();
+    if (!text) return;
+
     setInputValue('');
 
-    if (currentQIndex < scaleData.questions.length) {
+    if (currentQIndex < scaleData.metadata.total) {
       const currentQ = scaleData.questions[currentQIndex];
-      const newAnswers = [...answers, { question: currentQ.text[lang], answer: userMsg.content || '' }];
-      setAnswers(newAnswers);
+      const matchedOpt = currentQ.options.find(o => o.label === text || text.includes(o.label));
 
-      const nextIndex = currentQIndex + 1;
-      setCurrentQIndex(nextIndex);
-
-      if (nextIndex < scaleData.questions.length) {
-        const nextQ = scaleData.questions[nextIndex];
-        setTimeout(() => {
-          setMessages(prev => [...prev, {
-            id: `q-${nextQ.id}`,
-            role: 'assistant',
-            isQuestion: true,
-            questionId: nextQ.id
-          }]);
-        }, 600);
+      if (matchedOpt) {
+        handleOptionClick(matchedOpt, currentQ.id);
       } else {
-        // Finished all questions, do consistency check
-        setIsChecking(true);
-        setMessages(prev => [...prev, {
-          id: 'checking',
-          role: 'assistant',
-          msgKey: 'checking',
-          isLoading: true
-        }]);
-
-        try {
-          const res = await fetch('/api/check', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ records: newAnswers, lang })
-          });
-          const data = await res.json();
-
-          setMessages(prev => prev.filter(m => m.id !== 'checking').concat({
-            id: 'check-result',
-            role: 'assistant',
-            content: data.result || (lang === 'zh' ? '校验完成，感谢您的配合！' : 'Verification complete, thank you!')
-          }));
-        } catch (e) {
-          setMessages(prev => prev.filter(m => m.id !== 'checking').concat({
-            id: 'check-error',
-            role: 'assistant',
-            msgKey: 'check-error'
-          }));
-        } finally {
-          setIsChecking(false);
-        }
+        const userMsg: Message = {
+          id: Date.now().toString(),
+          role: 'user',
+          content: text
+        };
+        setMessages(prev => [...prev, userMsg]);
+        const newAnswers = [...answers, { question: currentQ.text, answer: text, score: -1 }];
+        setAnswers(newAnswers);
+        advanceToNextQuestion();
       }
     } else {
-      // Chat after finishing
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        role: 'user',
+        content: text
+      }]);
       setTimeout(() => {
         setMessages(prev => [...prev, {
-          id: Date.now().toString(),
+          id: Date.now().toString() + '-reply',
           role: 'assistant',
-          msgKey: 'finish'
+          content: '量表已完成，感谢您的反馈！'
         }]);
       }, 500);
     }
   };
 
-  const requestExplanation = async (msgId: string, questionId?: string) => {
-    if (!questionId) return;
-    const q = scaleData.questions.find(q => q.id === questionId);
-    if (!q) return;
+  const advanceToNextQuestion = () => {
+    const nextIndex = currentQIndex + 1;
+    setCurrentQIndex(nextIndex);
 
-    const questionText = q.text[lang];
-    const explainMsgId = `explain-${msgId}`;
+    if (nextIndex < scaleData.metadata.total) {
+      const nextQ = scaleData.questions[nextIndex];
+      setTimeout(() => {
+        setMessages(prev => [...prev, {
+          id: `q-${nextQ.id}`,
+          role: 'assistant',
+          content: nextQ.text,
+          isQuestion: true,
+          questionId: nextQ.id,
+          options: nextQ.options
+        }]);
+      }, 600);
+    } else {
+      setTimeout(() => {
+        setMessages(prev => [...prev, {
+          id: 'finish',
+          role: 'assistant',
+          content: '感谢您的配合！所有题目已回答完毕。您可以点击下方按钮导出评估结果。',
+          isExport: true
+        }]);
+      }, 600);
+    }
+  };
 
+  const requestExplanation = async (questionText: string, msgId: string) => {
+    if (!chatRef.current) {
+      alert("请先在右上角配置 API Key");
+      setTempKey(apiKey);
+      setShowSettings(true);
+      return;
+    }
+
+    const explainMsgId = `explain-${msgId}-${Date.now()}`;
     setMessages(prev => {
       const newMsgs = [...prev];
       const qIndex = newMsgs.findIndex(m => m.id === msgId);
@@ -253,7 +234,7 @@ export default function ChatUI() {
         newMsgs.splice(qIndex + 1, 0, {
           id: explainMsgId,
           role: 'assistant',
-          content: lang === 'zh' ? '正在为您解释...' : 'Explaining...',
+          content: '正在为您解释...',
           isLoading: true
         });
       }
@@ -261,25 +242,42 @@ export default function ChatUI() {
     });
 
     try {
-      const res = await fetch('/api/explain', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: questionText, lang })
+      const response = await chatRef.current.sendMessage({
+        message: `请解释这道题目：“${questionText}”`
       });
-      const data = await res.json();
 
       setMessages(prev => prev.map(m =>
         m.id === explainMsgId
-          ? { ...m, content: data.explanation || (lang === 'zh' ? '抱歉，暂时无法提供解释。' : 'Sorry, explanation unavailable.'), isLoading: false }
+          ? { ...m, content: response.text || '抱歉，暂时无法提供解释。', isLoading: false }
           : m
       ));
     } catch (e) {
+      console.error(e);
       setMessages(prev => prev.map(m =>
         m.id === explainMsgId
-          ? { ...m, content: lang === 'zh' ? '网络错误。' : 'Network error.', isLoading: false }
+          ? { ...m, content: '网络错误或 API Key 无效，请检查设置。', isLoading: false }
           : m
       ));
     }
+  };
+
+  const handleExport = () => {
+    const headers = ['题号', '题目', '您的回答', '得分'];
+    const rows = answers.map((a, i) => [
+      i + 1,
+      `"${a.question.replace(/"/g, '""')}"`,
+      `"${a.answer.replace(/"/g, '""')}"`,
+      a.score === -1 ? 'N/A' : a.score
+    ]);
+    const csvContent = [headers, ...rows].map(e => e.join(",")).join("\\n");
+    const blob = new Blob(["\\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `${scaleData.metadata.title}_评估结果.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   return (
@@ -291,38 +289,35 @@ export default function ChatUI() {
             <span className="text-xl">👨‍⚕️</span>
           </div>
           <div>
-            <h1 className="font-medium text-slate-800 text-base">
-              {lang === 'zh' ? '儿童发育行为助手' : 'Developmental Assistant'}
-            </h1>
-            <p className="text-slate-500 text-xs">
-              {lang === 'zh' ? '主治医师在线辅助' : 'Attending Physician Online'}
-            </p>
+            <h1 className="font-medium text-slate-800 text-base">{scaleData.metadata.title}</h1>
+            <p className="text-slate-500 text-xs">主治医师在线辅助</p>
           </div>
         </div>
         <button
-          onClick={handleLangChange}
-          className="flex items-center text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 px-2.5 py-1.5 rounded-full transition-colors"
+          onClick={() => {
+            setTempKey(apiKey);
+            setShowSettings(true);
+          }}
+          className="p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors"
+          title="设置 API Key"
         >
-          <Globe className="w-3.5 h-3.5 mr-1" />
-          {lang === 'zh' ? 'EN' : '中'}
+          <Settings className="w-5 h-5" />
         </button>
       </div>
 
       {/* Progress Indicator */}
       <div className="bg-white px-4 py-2 border-b border-slate-100 shadow-sm z-10 relative">
         <div className="flex justify-between items-center mb-1.5">
-          <span className="text-xs font-medium text-slate-500">
-            {lang === 'zh' ? '填写进度' : 'Progress'}
-          </span>
+          <span className="text-xs font-medium text-slate-500">填写进度</span>
           <span className="text-xs font-bold text-emerald-600">
-            {lang === 'zh' ? '题目' : 'Question'} {Math.min(currentQIndex + 1, scaleData.questions.length)} / {scaleData.questions.length}
+            题目 {Math.min(currentQIndex + 1, scaleData.metadata.total)} / {scaleData.metadata.total}
           </span>
         </div>
         <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
           <motion.div
             className="bg-emerald-500 h-1.5 rounded-full"
             initial={{ width: 0 }}
-            animate={{ width: `${(Math.min(currentQIndex + 1, scaleData.questions.length) / scaleData.questions.length) * 100}%` }}
+            animate={{ width: `${(Math.min(currentQIndex + 1, scaleData.metadata.total) / scaleData.metadata.total) * 100}%` }}
             transition={{ duration: 0.5, ease: "easeInOut" }}
           />
         </div>
@@ -355,20 +350,45 @@ export default function ChatUI() {
                   {msg.isLoading ? (
                     <div className="flex items-center space-x-2 text-slate-500">
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span className="text-sm">{getMessageContent(msg, lang)}</span>
+                      <span className="text-sm">{msg.content}</span>
                     </div>
                   ) : (
-                    <p className="text-[15px] leading-relaxed whitespace-pre-wrap">{getMessageContent(msg, lang)}</p>
+                    <p className="text-[15px] leading-relaxed whitespace-pre-wrap">{msg.content}</p>
                   )}
                 </div>
 
+                {msg.isQuestion && msg.options && (
+                  <div className="mt-2 flex flex-col gap-2 w-full">
+                    {msg.options.map((opt, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => handleOptionClick(opt, msg.questionId!)}
+                        disabled={currentQIndex >= scaleData.metadata.total || msg.questionId !== scaleData.questions[currentQIndex]?.id}
+                        className="text-sm bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-xl px-4 py-2.5 hover:bg-emerald-100 transition-colors text-left disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 {msg.isQuestion && (
                   <button
-                    onClick={() => requestExplanation(msg.id, msg.questionId)}
-                    className="mt-2 text-xs flex items-center text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-full transition-colors shadow-sm"
+                    onClick={() => requestExplanation(msg.content, msg.id)}
+                    className="mt-2 text-xs flex items-center text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-full transition-colors shadow-sm self-start"
                   >
                     <HelpCircle className="w-3.5 h-3.5 mr-1" />
-                    {lang === 'zh' ? '请求 AI 解释' : 'Ask AI to explain'}
+                    请求 AI 解释
+                  </button>
+                )}
+
+                {msg.isExport && (
+                  <button
+                    onClick={handleExport}
+                    className="mt-3 text-sm flex items-center text-white bg-emerald-600 hover:bg-emerald-700 px-5 py-2.5 rounded-xl transition-colors shadow-md"
+                  >
+                    <Download className="w-4 h-4 mr-2" />
+                    导出评估结果 (CSV)
                   </button>
                 )}
               </div>
@@ -392,7 +412,7 @@ export default function ChatUI() {
                 ? 'bg-emerald-500 text-white scale-110 shadow-md'
                 : 'text-slate-500 hover:bg-slate-200'
             }`}
-            title={lang === 'zh' ? '按住说话' : 'Hold to speak'}
+            title="按住说话"
           >
             <Mic className={`w-5 h-5 ${isRecording ? 'animate-pulse' : ''}`} />
           </button>
@@ -406,25 +426,65 @@ export default function ChatUI() {
                 handleSend();
               }
             }}
-            placeholder={isRecording ? (lang === 'zh' ? "正在聆听..." : "Listening...") : (lang === 'zh' ? "输入您的回答..." : "Type your answer...")}
+            placeholder={isRecording ? "正在聆听..." : "输入您的回答..."}
             className="flex-1 bg-transparent border-none focus:ring-0 resize-none py-2.5 px-2 max-h-32 min-h-[44px] text-[15px] text-slate-800 outline-none"
             rows={1}
           />
 
           <button
             onClick={handleSend}
-            disabled={!inputValue.trim() || isChecking}
+            disabled={!inputValue.trim()}
             className="p-2.5 rounded-full bg-emerald-500 text-white disabled:opacity-50 disabled:bg-slate-300 transition-colors flex-shrink-0"
           >
             <Send className="w-5 h-5 ml-0.5" />
           </button>
         </div>
-        <div className="text-center mt-2">
-          <span className="text-[10px] text-slate-400">
-            {lang === 'zh' ? '按住麦克风说话，松开结束' : 'Hold mic to speak, release to send'}
-          </span>
-        </div>
       </div>
+
+      {/* Settings Modal */}
+      <AnimatePresence>
+        {showSettings && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl"
+            >
+              <h2 className="text-lg font-semibold mb-2 text-slate-800">配置 API Key</h2>
+              <p className="text-xs text-slate-500 mb-4">
+                请输入您的 Google Gemini API Key 以启用 AI 解释功能。该 Key 仅保存在您的浏览器本地。
+              </p>
+              <input
+                type="password"
+                value={tempKey}
+                onChange={e => setTempKey(e.target.value)}
+                placeholder="AIzaSy..."
+                className="w-full border border-slate-300 rounded-xl px-4 py-2.5 mb-5 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
+              />
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setShowSettings(false)}
+                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={saveApiKey}
+                  className="px-4 py-2 text-sm font-medium bg-emerald-500 text-white rounded-xl hover:bg-emerald-600 transition-colors shadow-sm"
+                >
+                  保存配置
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
