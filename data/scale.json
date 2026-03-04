@@ -1,0 +1,51 @@
+{
+  "metadata": {
+    "title": {
+      "zh": "儿童发育行为量表",
+      "en": "Child Development and Behavior Scale"
+    },
+    "total": 5
+  },
+  "questions": [
+    {
+      "id": "q1",
+      "text": {
+        "zh": "孩子平时能安静地坐着画画或看书超过15分钟吗？",
+        "en": "Can your child sit quietly and draw or read for more than 15 minutes?"
+      },
+      "next": "q2"
+    },
+    {
+      "id": "q2",
+      "text": {
+        "zh": "当您叫孩子的名字时，他/她通常会立刻转头看您吗？",
+        "en": "When you call your child's name, do they usually turn to look at you immediately?"
+      },
+      "next": "q3"
+    },
+    {
+      "id": "q3",
+      "text": {
+        "zh": "孩子在玩耍时，会主动把玩具拿给您看，或者邀请您一起玩吗？",
+        "en": "When playing, does your child actively show you toys or invite you to play together?"
+      },
+      "next": "q4"
+    },
+    {
+      "id": "q4",
+      "text": {
+        "zh": "孩子会经常重复说同一句话，或者模仿电视里的台词吗？",
+        "en": "Does your child often repeat the same sentence or imitate lines from TV?"
+      },
+      "next": "q5"
+    },
+    {
+      "id": "q5",
+      "text": {
+        "zh": "孩子在陌生的环境中，会紧紧抓住您，还是会自己去探索？",
+        "en": "In an unfamiliar environment, does your child cling to you tightly, or do they explore on their own?"
+      },
+      "next": null
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "name": "儿童发育行为量表助手",
+  "description": "一个对话式的智能医学量表采集工具，帮助家属轻松完成量表填写。",
+  "requestFramePermissions": ["microphone"]
+}
